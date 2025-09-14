@@ -1,9 +1,3 @@
-//
-//  PasskeyModels.swift
-//  Pods
-//
-//  Created by Bence Nagy on 06.07.2025.
-//
 
 import AuthenticationServices
 
