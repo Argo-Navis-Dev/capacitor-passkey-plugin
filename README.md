@@ -13,7 +13,7 @@ A custom Capacitor plugin that implements WebAuthn passkey creation and authenti
 ## Installation
 
 ```bash
-npm install
+npm install capacitor-passkey-plugin
 npx cap sync
 ```
 
