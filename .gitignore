@@ -128,3 +128,6 @@ docs/temp/
 # Capacitor specific
 android/capacitor.config.json
 ios/capacitor.config.json
+
+#Claude
+claude/settings.local.json
