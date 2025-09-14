@@ -4,16 +4,15 @@ import Foundation
 
 @available(iOS 15.0, *)
 public enum PasskeyPluginErrorCode: String {
-    // CreatePasskey errors
-    case missingPublicKeyCreate = "-100"
-    case jsonSerializationCreate = "-101"
-    case passkeyCreationFailed = "-102"
-    // Authenticate errors
-    case missingPublicKeyAuth = "-200"
-    case jsonSerializationAuth = "-201"
-    case passkeyAuthFailed = "-202"
-    // General
-    case unsupportedCredentialType = "-300"
+    // Standardized error codes matching Web and Android
+    case unknown = "UNKNOWN_ERROR"
+    case cancelled = "CANCELLED"
+    case domError = "DOM_ERROR"
+    case unsupported = "UNSUPPORTED_ERROR"
+    case timeout = "TIMEOUT"
+    case noCredential = "NO_CREDENTIAL"
+    case invalidInput = "INVALID_INPUT"
+    case rpIdValidation = "RPID_VALIDATION_ERROR"
 }
 
 // Optional: If you want to share the StringError struct as well

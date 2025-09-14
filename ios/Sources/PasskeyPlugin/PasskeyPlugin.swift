@@ -25,8 +25,8 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func createPasskey(_ call: CAPPluginCall) {
         guard let publicKeyData = extractPublicKeyData(
             from: call,
-            missingParamCode: PasskeyPluginErrorCode.missingPublicKeyCreate,
-            jsonErrorCode: PasskeyPluginErrorCode.jsonSerializationCreate
+            missingParamCode: PasskeyPluginErrorCode.invalidInput,
+            jsonErrorCode: PasskeyPluginErrorCode.invalidInput
         ) else { return }
 
         Task {
@@ -35,13 +35,14 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve(result)
             } catch {
                 let errorMsg = error.localizedDescription
+                let errorCode = mapNSErrorToStandardCode(error)
                 print("[PasskeyPlugin] Passkey creation failed: \(errorMsg)")
                 call.reject(
                     errorMsg,
-                    PasskeyPluginErrorCode.passkeyCreationFailed.rawValue,
+                    errorCode,
                     PasskeyPluginStringError(
                         message: "passkey_creation_failed",
-                        descriptionText: "Passkey creation failed: \(errorMsg)"
+                        descriptionText: errorMsg
                     )
                 )
             }
@@ -52,8 +53,8 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func authenticate(_ call: CAPPluginCall) {
         guard let publicKeyData = extractPublicKeyData(
             from: call,
-            missingParamCode: PasskeyPluginErrorCode.missingPublicKeyAuth,
-            jsonErrorCode: PasskeyPluginErrorCode.jsonSerializationAuth
+            missingParamCode: PasskeyPluginErrorCode.invalidInput,
+            jsonErrorCode: PasskeyPluginErrorCode.invalidInput
         ) else { return }
 
         Task {
@@ -62,13 +63,14 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve(result)
             } catch {
                 let errorMsg = error.localizedDescription
+                let errorCode = mapNSErrorToStandardCode(error)
                 print("[PasskeyPlugin] Passkey authentication failed: \(errorMsg)")
                 call.reject(
                     errorMsg,
-                    PasskeyPluginErrorCode.passkeyAuthFailed.rawValue,
+                    errorCode,
                     PasskeyPluginStringError(
                         message: "passkey_authentication_failed",
-                        descriptionText: "Passkey authentication failed: \(errorMsg)"
+                        descriptionText: errorMsg
                     )
                 )
             }
@@ -108,5 +110,41 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         return publicKeyData
+    }
+    
+    /// Maps NSError and specific error types to standardized error codes
+    private func mapNSErrorToStandardCode(_ error: Error) -> String {
+        let nsError = error as NSError
+        
+        // Check for specific error domains and codes
+        switch nsError.domain {
+        case "PasskeyTimeout":
+            return PasskeyPluginErrorCode.timeout.rawValue
+        case "PasskeyValidation":
+            return PasskeyPluginErrorCode.rpIdValidation.rawValue
+        case "ASAuthorizationError":
+            switch nsError.code {
+            case 1001: // ASAuthorizationError.Code.canceled
+                return PasskeyPluginErrorCode.cancelled.rawValue
+            case 1004: // ASAuthorizationError.Code.notHandled
+                return PasskeyPluginErrorCode.noCredential.rawValue
+            default:
+                return PasskeyPluginErrorCode.unknown.rawValue
+            }
+        default:
+            // Check error message for common patterns
+            let errorMsg = nsError.localizedDescription.lowercased()
+            if errorMsg.contains("cancel") || errorMsg.contains("user") {
+                return PasskeyPluginErrorCode.cancelled.rawValue
+            } else if errorMsg.contains("timeout") {
+                return PasskeyPluginErrorCode.timeout.rawValue
+            } else if errorMsg.contains("unsupported") || errorMsg.contains("not supported") {
+                return PasskeyPluginErrorCode.unsupported.rawValue
+            } else if errorMsg.contains("credential") && errorMsg.contains("not found") {
+                return PasskeyPluginErrorCode.noCredential.rawValue
+            } else {
+                return PasskeyPluginErrorCode.unknown.rawValue
+            }
+        }
     }
 }

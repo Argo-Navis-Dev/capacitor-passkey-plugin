@@ -16,7 +16,7 @@ internal struct PasskeyRegistrationOptions: Decodable {
     var user: PasskeyUserEntity
     var challenge: Base64URLString
     var pubKeyCredParams: [PasskeyCredentialParameters]
-    var timeout: Int
+    var timeout: Int?
     var excludeCredentials: [PasskeyCredentialDescriptor]?
     var authenticatorSelection: PasskeyAuthSelectionCriteria?
     var attestation: PasskeyAttestationConveyancePref?
@@ -27,7 +27,7 @@ internal struct PasskeyRegistrationOptions: Decodable {
 internal struct PasskeyAuthenticationOptions: Decodable {
     var challenge: Base64URLString
     var rpId: String
-    var timeout: Int? = 60000
+    var timeout: Int?
     var allowCredentials: [PasskeyCredentialDescriptor]?
     var userVerification: PasskeyUserVerificationReq?
     var extensions: PasskeyAuthExtensions?
@@ -85,16 +85,22 @@ internal struct PasskeyCredentialDescriptor: Decodable {
     var transports: [PasskeyAuthTransport]?
     var type: PasskeyCredentialType = .publicKey
 
-    func asPlatformDescriptor() -> ASAuthorizationPlatformPublicKeyCredentialDescriptor {
-        return ASAuthorizationPlatformPublicKeyCredentialDescriptor.init(credentialID: Data(base64URLEncoded: self.id)!)
+    func asPlatformDescriptor() -> ASAuthorizationPlatformPublicKeyCredentialDescriptor? {
+        guard let credentialData = Data(base64URLEncoded: self.id) else {
+            return nil
+        }
+        return ASAuthorizationPlatformPublicKeyCredentialDescriptor.init(credentialID: credentialData)
     }
 
-    func asCrossPlatformDescriptor() -> ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor {
+    func asCrossPlatformDescriptor() -> ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor? {
+        guard let credentialData = Data(base64URLEncoded: self.id) else {
+            return nil
+        }
         var trList = ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.Transport.allSupported
         if self.transports?.isEmpty == false {
             trList = self.transports!.compactMap { $0.toAppleTransport() }
         }
-        return ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.init(credentialID: Data(base64URLEncoded: self.id)!,
+        return ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.init(credentialID: credentialData,
                                                                             transports: trList)
     }
 
@@ -106,7 +112,10 @@ internal struct PasskeyCredentialDescriptor: Decodable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decodeIfPresent(String.self, forKey: .id)!
+        guard let idValue = try container.decodeIfPresent(String.self, forKey: .id) else {
+            throw DecodingError.keyNotFound(CodingKeys.id, DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Missing 'id' field"))
+        }
+        id = idValue
         transports = try container.decodeIfPresent([PasskeyAuthTransport].self, forKey: .transports)
         if let typeVal = try container.decodeIfPresent(String.self, forKey: .type) {
             type = PasskeyCredentialType(rawValue: typeVal) ?? .publicKey
@@ -185,8 +194,6 @@ internal enum PasskeyUserVerificationReq: String, Codable {
             return ASAuthorizationPublicKeyCredentialUserVerificationPreference.preferred
         case .required:
             return ASAuthorizationPublicKeyCredentialUserVerificationPreference.required
-        default:
-            return ASAuthorizationPublicKeyCredentialUserVerificationPreference.preferred
         }
     }
 }
@@ -205,8 +212,6 @@ internal enum PasskeyResidentKeyReq: String, Decodable {
             return ASAuthorizationPublicKeyCredentialResidentKeyPreference.preferred
         case .required:
             return ASAuthorizationPublicKeyCredentialResidentKeyPreference.required
-        default:
-            return ASAuthorizationPublicKeyCredentialResidentKeyPreference.preferred
         }
     }
 }
@@ -227,8 +232,8 @@ internal enum PasskeyAttestationConveyancePref: String, Decodable {
             return ASAuthorizationPublicKeyCredentialAttestationKind.indirect
         case .enterprise:
             return ASAuthorizationPublicKeyCredentialAttestationKind.enterprise
-        default:
-            return ASAuthorizationPublicKeyCredentialAttestationKind.direct
+        case .none:
+            return ASAuthorizationPublicKeyCredentialAttestationKind.none
         }
     }
 }
