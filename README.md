@@ -149,3 +149,9 @@ try {
   }
 }
 ```
+
+## Documentation and Examples
+You can find more documentation and examples in the [docs](https://github.com/Argo-Navis-Dev/capacitor-passkey-plugin/tree/main/docs) folder.
+
+## DeepWiki
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](http://deepwiki.com/Argo-Navis-Dev/capacitor-passkey-plugin/)
