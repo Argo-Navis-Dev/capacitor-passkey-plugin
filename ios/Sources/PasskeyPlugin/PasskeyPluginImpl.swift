@@ -31,17 +31,20 @@ import AuthenticationServices
     }
 
     @objc public func createPasskey(_ publicKey: Data) async throws -> [String: Any] {
-        let publicKeyStr = String(data: publicKey, encoding: .utf8) ?? "{}"
-        print("Create passkey with JSON: " +  publicKeyStr)
         do {
+            let requestJSON = try JSONDecoder().decode(PasskeyRegistrationOptions.self, from: publicKey)
 
-            let requestData = publicKeyStr.data(using: .utf8)!;
-            let requestJSON = try JSONDecoder().decode(PasskeyRegistrationOptions.self, from: requestData);
+            // Ensure rpId is present (required for native passkey operations)
+            guard let rpId = requestJSON.rp.id else {
+                throw NSError(
+                    domain: "PasskeyValidation",
+                    code: -1008,
+                    userInfo: [NSLocalizedDescriptionKey: "Missing rp.id: relying party identifier is required"]
+                )
+            }
 
             // Validate rpId against associated domains
-            if let rpId = requestJSON.rp.id {
-                try validateRpId(rpId)
-            }
+            try validateRpId(rpId)
 
             guard let challengeData: Data = Data(base64URLEncoded: requestJSON.challenge) else {
                 throw NSError(domain: "PasskeyValidation", code: -1006, userInfo: [NSLocalizedDescriptionKey: "Invalid challenge: not valid base64url format"])
@@ -51,8 +54,8 @@ import AuthenticationServices
                 throw NSError(domain: "PasskeyValidation", code: -1007, userInfo: [NSLocalizedDescriptionKey: "Invalid user.id: not valid base64url format"])
             }
 
-            let platformKeyRequest: ASAuthorizationRequest = self.configureCreatePlatformRequest(challenge: challengeData, userId: userIdData, request: requestJSON);
-            let securityKeyRequest: ASAuthorizationRequest = self.configureCreateSecurityKeyRequest(challenge: challengeData, userId: userIdData, request: requestJSON);
+            let platformKeyRequest: ASAuthorizationRequest = self.configureCreatePlatformRequest(challenge: challengeData, userId: userIdData, rpId: rpId, request: requestJSON);
+            let securityKeyRequest: ASAuthorizationRequest = self.configureCreateSecurityKeyRequest(challenge: challengeData, userId: userIdData, rpId: rpId, request: requestJSON);
             
             // Read authenticator attachment preference from request
             let authenticatorAttachment = requestJSON.authenticatorSelection?.authenticatorAttachment
@@ -80,17 +83,14 @@ import AuthenticationServices
             }
 
         }catch let error as NSError {
-            print("createPasskey failed: \(error.localizedDescription)")
             throw error
         }
     }
 
 
     @objc public func authenticate(_ publicKey: Data) async throws -> [String: Any] {
-        let publicKeyStr = String(data: publicKey, encoding: .utf8) ?? "{}"
         do {
-            let requestData = publicKeyStr.data(using: .utf8)!;
-            let requestJSON = try JSONDecoder().decode(PasskeyAuthenticationOptions.self, from: requestData);
+            let requestJSON = try JSONDecoder().decode(PasskeyAuthenticationOptions.self, from: publicKey)
 
             // Validate rpId against associated domains
             try validateRpId(requestJSON.rpId)
@@ -99,10 +99,10 @@ import AuthenticationServices
                 throw NSError(domain: "PasskeyValidation", code: -1006, userInfo: [NSLocalizedDescriptionKey: "Invalid challenge: not valid base64url format"])
             }
 
-            // Determine authenticator preference based on allowCredentials
-            // If no specific preference, allow both platform and security keys
-            let forceSecurityKey: Bool = false
-            let forcePlatformKey: Bool = false
+            // Read authenticator attachment preference from request
+            let authenticatorAttachment = requestJSON.authenticatorAttachment
+            let forceSecurityKey = authenticatorAttachment == .crossPlatform
+            let forcePlatformKey = authenticatorAttachment == .platform
 
             let platformKeyRequest: ASAuthorizationRequest = self.configureGetPlatformRequest(challenge: challengeData, request: requestJSON);
             let securityKeyRequest: ASAuthorizationRequest = self.configureGetSecurityKeyRequest(challenge: challengeData, request: requestJSON);
@@ -128,14 +128,13 @@ import AuthenticationServices
                 }
             }
         }catch let error as NSError {
-            print("Create passkey failed: \(error.localizedDescription)")
             throw error
         }
     }
 
-    private func configureCreatePlatformRequest(challenge: Data, userId: Data, request: PasskeyRegistrationOptions) -> ASAuthorizationPlatformPublicKeyCredentialRegistrationRequest {
+    private func configureCreatePlatformRequest(challenge: Data, userId: Data, rpId: String, request: PasskeyRegistrationOptions) -> ASAuthorizationPlatformPublicKeyCredentialRegistrationRequest {
 
-        let platformProvider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: request.rp.id!);
+        let platformProvider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId);
         let authRequest = platformProvider.createCredentialRegistrationRequest(challenge: challenge,
                                                                                name: request.user.name,
                                                                                userID: userId);
@@ -158,9 +157,9 @@ import AuthenticationServices
         return authRequest;
     }
 
-    private func configureCreateSecurityKeyRequest(challenge: Data, userId: Data, request: PasskeyRegistrationOptions) -> ASAuthorizationSecurityKeyPublicKeyCredentialRegistrationRequest {
+    private func configureCreateSecurityKeyRequest(challenge: Data, userId: Data, rpId: String, request: PasskeyRegistrationOptions) -> ASAuthorizationSecurityKeyPublicKeyCredentialRegistrationRequest {
 
-        let securityKeyProvider = ASAuthorizationSecurityKeyPublicKeyCredentialProvider(relyingPartyIdentifier: request.rp.id!);
+        let securityKeyProvider = ASAuthorizationSecurityKeyPublicKeyCredentialProvider(relyingPartyIdentifier: rpId);
 
         let authRequest = securityKeyProvider.createCredentialRegistrationRequest(challenge: challenge,
                                                                                   displayName: request.user.displayName,

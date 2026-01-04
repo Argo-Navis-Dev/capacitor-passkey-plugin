@@ -36,7 +36,7 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
             } catch {
                 let errorMsg = error.localizedDescription
                 let errorCode = mapNSErrorToStandardCode(error)
-                print("[PasskeyPlugin] Passkey creation failed: \(errorMsg)")
+                
                 call.reject(
                     errorMsg,
                     errorCode,
@@ -63,8 +63,7 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.resolve(result)
             } catch {
                 let errorMsg = error.localizedDescription
-                let errorCode = mapNSErrorToStandardCode(error)
-                print("[PasskeyPlugin] Passkey authentication failed: \(errorMsg)")
+                let errorCode = mapNSErrorToStandardCode(error)                
                 call.reject(
                     errorMsg,
                     errorCode,

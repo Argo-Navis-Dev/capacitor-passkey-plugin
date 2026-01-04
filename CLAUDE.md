@@ -55,3 +55,33 @@ Capacitor Passkey Plugin - A cross-platform WebAuthn (Passkeys) implementation f
 - Plugin registered as `PasskeyPlugin` in Capacitor
 - Methods: `createPasskey` and `authenticate`
 - All binary data (challenges, credential IDs, etc.) encoded as base64url strings for cross-platform compatibility
+
+### Error Handling Architecture
+All platforms use standardized error codes for consistent error handling:
+- Error codes defined in `PasskeyPluginError.swift` (iOS), `PasskeyPlugin.kt` (Android), and `web.ts` (Web)
+- Standard codes: `UNKNOWN_ERROR`, `CANCELLED`, `DOM_ERROR`, `UNSUPPORTED_ERROR`, `TIMEOUT`, `NO_CREDENTIAL`, `INVALID_INPUT`, `RPID_VALIDATION_ERROR`
+- iOS: Uses `mapNSErrorToStandardCode()` to map native errors to standard codes
+- Android: Uses `handleCreatePasskeyException()` and `handleAuthenticationError()` for exception mapping
+- Web: Maps DOMException names to error codes in catch blocks
+
+### iOS Implementation Details
+- **Entry point**: `PasskeyPlugin.swift` - Capacitor plugin wrapper
+- **Core logic**: `PasskeyPluginImpl.swift` - Handles WebAuthn operations
+- **Delegate**: `PasskeyCredentialDelegate.swift` - ASAuthorization delegate with timeout support
+- **Data models**: `PasskeyModels.swift` - Codable structs for WebAuthn options
+- **rpId validation**: Validates against `com.apple.developer.web-credentials` in Info.plist
+- **Authenticator selection**: Supports platform, cross-platform, or both based on `authenticatorAttachment`
+- Uses `ASAuthorizationPlatformPublicKeyCredentialProvider` for biometric auth and `ASAuthorizationSecurityKeyPublicKeyCredentialProvider` for external keys
+
+### Android Implementation Details
+- **Single file**: `PasskeyPlugin.kt` contains all implementation
+- **Coroutines**: Uses `CoroutineScope` with `Dispatchers.Main` for async operations
+- **Timeout enforcement**: Uses `withTimeout()` to enforce timeout from options
+- **Input validation**: Validates base64url format for challenges and credential IDs using `isValidBase64Url()`
+- **Lifecycle**: Properly cancels coroutine scope in `handleOnDestroy()` to prevent leaks
+
+### Base64url Encoding
+- All platforms convert WebAuthn binary data (challenges, credential IDs, attestation objects, etc.) to/from base64url format
+- Web: `base64urlToUint8Array()` and `toBase64url()` helper methods
+- iOS: Uses `Data(base64URLEncoded:)` extension from `Data.swift`
+- Android: Validates with regex and decodes using `Base64.decode()` after converting to standard base64

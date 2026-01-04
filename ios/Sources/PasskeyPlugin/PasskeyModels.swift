@@ -25,6 +25,7 @@ internal struct PasskeyAuthenticationOptions: Decodable {
     var allowCredentials: [PasskeyCredentialDescriptor]?
     var userVerification: PasskeyUserVerificationReq?
     var extensions: PasskeyAuthExtensions?
+    var authenticatorAttachment: PasskeyAuthAttachment?
 }
 
 extension Array {
@@ -86,12 +87,17 @@ internal struct PasskeyCredentialDescriptor: Decodable {
         return ASAuthorizationPlatformPublicKeyCredentialDescriptor.init(credentialID: credentialData)
     }
 
+    /// Converts this credential descriptor to an Apple security key descriptor for external authenticators.
+    /// Used for cross-platform authenticators like YubiKeys and other FIDO2 security keys.
+    /// - Returns: An `ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor` if the credential ID is valid base64url, nil otherwise.
     func asCrossPlatformDescriptor() -> ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor? {
         guard let credentialData = Data(base64URLEncoded: self.id) else {
             return nil
         }
+        // Default to all supported transports (USB, NFC, Bluetooth) if none specified
         var trList = ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.Transport.allSupported
         if self.transports?.isEmpty == false {
+            // Use only the transports specified by the relying party
             trList = self.transports!.compactMap { $0.toAppleTransport() }
         }
         return ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.init(credentialID: credentialData,
@@ -117,13 +123,21 @@ internal struct PasskeyCredentialDescriptor: Decodable {
     }
 }
 
+/// Transport methods for communicating with external security keys (YubiKey, etc.).
+/// These define how the device connects to the authenticator during WebAuthn operations.
 @available(iOS 15.0, *)
 internal enum PasskeyAuthTransport: String, Codable {
+    /// Bluetooth Low Energy - wireless connection to security keys
     case ble
+    /// Hybrid transport - cross-device authentication via QR code (e.g., using phone as authenticator)
     case hybrid
+    /// NFC - tap-to-authenticate with NFC-enabled security keys like YubiKey 5 NFC
     case nfc
+    /// USB - direct wired connection to security keys like YubiKey 5
     case usb
 
+    /// Converts WebAuthn transport to Apple's security key transport type.
+    /// - Returns: The corresponding Apple transport, or nil for unsupported transports (e.g., hybrid).
     func toAppleTransport() -> ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.Transport? {
         switch self {
         case .ble:
@@ -133,6 +147,7 @@ internal enum PasskeyAuthTransport: String, Codable {
         case .usb:
             return ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.Transport.usb
         default:
+            // hybrid transport not directly supported by Apple's API
             return nil
         }
     }
@@ -168,9 +183,11 @@ internal struct PasskeyAuthSelectionCriteria: Decodable {
     }
 }
 
+/// Specifies the type of authenticator to use for passkey operations.
 internal enum PasskeyAuthAttachment: String, Codable {
+    /// Platform authenticator - built-in biometrics (Face ID, Touch ID) stored on the device
     case platform
-    // When that the user prefers to select a security key
+    /// Cross-platform authenticator - external security keys like YubiKey that can be used across devices
     case crossPlatform = "cross-platform"
 }
 
