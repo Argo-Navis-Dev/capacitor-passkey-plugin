@@ -4,10 +4,7 @@ import AuthenticationServices
 
 @available(iOS 15.0, *)
 @objc public class PasskeyPluginImpl: NSObject {
-    
-    // Store delegates to prevent deallocation during async operations
-    private var activeDelegate: PasskeyCredentialDelegate?
-    
+
     // Validate rpId against app's associated domains
     private func validateRpId(_ rpId: String) throws {
         guard let infoPlist = Bundle.main.infoDictionary,
@@ -65,13 +62,13 @@ import AuthenticationServices
             let authController: ASAuthorizationController = self.configureAuthController(forcePlatformKey: forcePlatformKey, forceSecurityKey: forceSecurityKey, platformKeyRequest: platformKeyRequest, securityKeyRequest: securityKeyRequest);
 
             let passkeyCredentialDelegate = await PasskeyCredentialDelegate()
-            self.activeDelegate = passkeyCredentialDelegate
+            let timeout = requestJSON.timeout ?? 60000  // Default 60 seconds
 
             return try await withCheckedThrowingContinuation { continuation in
-                let timeout = requestJSON.timeout ?? 60000  // Default 60 seconds
                 Task { @MainActor in
-                    passkeyCredentialDelegate.performAuthForController(controller: authController, timeout: TimeInterval(timeout)) { [weak self] result in
-                        self?.activeDelegate = nil
+                    passkeyCredentialDelegate.performAuthForController(controller: authController, timeout: TimeInterval(timeout)) { result in
+                        // Delegate is kept alive by this closure's capture until completion
+                        _ = passkeyCredentialDelegate
                         switch result {
                         case .success(let data):
                             continuation.resume(returning: data)
@@ -81,9 +78,6 @@ import AuthenticationServices
                     }
                 }
             }
-
-        }catch let error as NSError {
-            throw error
         }
     }
 
@@ -110,14 +104,14 @@ import AuthenticationServices
             // Get authorization controller
             let authController: ASAuthorizationController = self.configureAuthController(forcePlatformKey: forcePlatformKey, forceSecurityKey: forceSecurityKey, platformKeyRequest: platformKeyRequest, securityKeyRequest: securityKeyRequest);
 
-            let passkeyCredentialDelegate = await PasskeyCredentialDelegate();
-            self.activeDelegate = passkeyCredentialDelegate
+            let passkeyCredentialDelegate = await PasskeyCredentialDelegate()
+            let timeout = requestJSON.timeout ?? 60000  // Default 60 seconds
 
             return try await withCheckedThrowingContinuation { continuation in
-                let timeout = requestJSON.timeout ?? 60000  // Default 60 seconds
                 Task { @MainActor in
-                    passkeyCredentialDelegate.performAuthForController(controller: authController, timeout: TimeInterval(timeout)) { [weak self] result in
-                        self?.activeDelegate = nil
+                    passkeyCredentialDelegate.performAuthForController(controller: authController, timeout: TimeInterval(timeout)) { result in
+                        // Delegate is kept alive by this closure's capture until completion
+                        _ = passkeyCredentialDelegate
                         switch result {
                         case .success(let data):
                             continuation.resume(returning: data)
@@ -127,8 +121,6 @@ import AuthenticationServices
                     }
                 }
             }
-        }catch let error as NSError {
-            throw error
         }
     }
 

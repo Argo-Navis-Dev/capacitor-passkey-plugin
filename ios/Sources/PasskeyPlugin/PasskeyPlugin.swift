@@ -1,5 +1,6 @@
 import Foundation
 import Capacitor
+import AuthenticationServices
 
 /**
  * PasskeyPlugin: Capacitor iOS plugin entry point for passkey registration and authentication.
@@ -111,39 +112,53 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
         return publicKeyData
     }
     
-    /// Maps NSError and specific error types to standardized error codes
+    /// Maps errors to standardized error codes using type-safe enum matching
     private func mapNSErrorToStandardCode(_ error: Error) -> String {
         let nsError = error as NSError
-        
-        // Check for specific error domains and codes
+
+        // Check for our custom error domains first
         switch nsError.domain {
         case "PasskeyTimeout":
             return PasskeyPluginErrorCode.timeout.rawValue
         case "PasskeyValidation":
             return PasskeyPluginErrorCode.rpIdValidation.rawValue
-        case "ASAuthorizationError":
-            switch nsError.code {
-            case 1001: // ASAuthorizationError.Code.canceled
-                return PasskeyPluginErrorCode.cancelled.rawValue
-            case 1004: // ASAuthorizationError.Code.notHandled
-                return PasskeyPluginErrorCode.noCredential.rawValue
-            default:
-                return PasskeyPluginErrorCode.unknown.rawValue
-            }
+        case "PasskeyDelegate":
+            return PasskeyPluginErrorCode.unsupported.rawValue
         default:
-            // Check error message for common patterns
-            let errorMsg = nsError.localizedDescription.lowercased()
-            if errorMsg.contains("cancel") || errorMsg.contains("user") {
+            break
+        }
+
+        // Check for ASAuthorizationError using proper enum matching
+        if let authError = error as? ASAuthorizationError {
+            switch authError.code {
+            case .canceled:
                 return PasskeyPluginErrorCode.cancelled.rawValue
-            } else if errorMsg.contains("timeout") {
-                return PasskeyPluginErrorCode.timeout.rawValue
-            } else if errorMsg.contains("unsupported") || errorMsg.contains("not supported") {
-                return PasskeyPluginErrorCode.unsupported.rawValue
-            } else if errorMsg.contains("credential") && errorMsg.contains("not found") {
+            case .invalidResponse:
+                return PasskeyPluginErrorCode.domError.rawValue
+            case .notHandled:
                 return PasskeyPluginErrorCode.noCredential.rawValue
-            } else {
+            case .failed:
+                return PasskeyPluginErrorCode.unknown.rawValue
+            case .notInteractive:
+                return PasskeyPluginErrorCode.unsupported.rawValue
+            case .matchedExcludedCredential:
+                return PasskeyPluginErrorCode.invalidInput.rawValue
+            case .unknown:
+                return PasskeyPluginErrorCode.unknown.rawValue
+            case .credentialImport:
+                return PasskeyPluginErrorCode.invalidInput.rawValue
+            case .credentialExport:
+                return PasskeyPluginErrorCode.invalidInput.rawValue
+            case .preferSignInWithApple:
+                return PasskeyPluginErrorCode.unsupported.rawValue
+            case .deviceNotConfiguredForPasskeyCreation:
+                return PasskeyPluginErrorCode.unsupported.rawValue
+            @unknown default:
                 return PasskeyPluginErrorCode.unknown.rawValue
             }
         }
+
+        // Fallback for truly unknown errors
+        return PasskeyPluginErrorCode.unknown.rawValue
     }
 }

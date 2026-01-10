@@ -61,12 +61,30 @@ internal struct PasskeyCredentialParameters: Decodable {
 
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let algVal = try container.decodeIfPresent(Int.self, forKey: .alg) {
-            alg = ASCOSEAlgorithmIdentifier(algVal)
+
+        // Algorithm is required per WebAuthn spec
+        guard let algVal = try container.decodeIfPresent(Int.self, forKey: .alg) else {
+            throw DecodingError.keyNotFound(CodingKeys.alg, DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "Missing required 'alg' field in pubKeyCredParams"
+            ))
         }
-        if let typeVal = try container.decodeIfPresent(String.self, forKey: .type) {
-            type = PasskeyCredentialType(rawValue: typeVal) ?? .publicKey
+        alg = ASCOSEAlgorithmIdentifier(algVal)
+
+        // Type is required per WebAuthn spec
+        guard let typeVal = try container.decodeIfPresent(String.self, forKey: .type) else {
+            throw DecodingError.keyNotFound(CodingKeys.type, DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "Missing required 'type' field in pubKeyCredParams"
+            ))
         }
+        guard let credType = PasskeyCredentialType(rawValue: typeVal) else {
+            throw DecodingError.dataCorrupted(DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid credential type '\(typeVal)'. Expected 'public-key'."
+            ))
+        }
+        type = credType
     }
 }
 
@@ -96,9 +114,34 @@ internal struct PasskeyCredentialDescriptor: Decodable {
         }
         // Default to all supported transports (USB, NFC, Bluetooth) if none specified
         var trList = ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.Transport.allSupported
-        if self.transports?.isEmpty == false {
-            // Use only the transports specified by the relying party
-            trList = self.transports!.compactMap { $0.toAppleTransport() }
+        if let requestedTransports = self.transports, !requestedTransports.isEmpty {
+            // Filter to only supported transports and log any unsupported ones
+            var supportedTransports: [ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.Transport] = []
+            var unsupportedTransports: [String] = []
+
+            for transport in requestedTransports {
+                if let appleTransport = transport.toAppleTransport() {
+                    supportedTransports.append(appleTransport)
+                } else {
+                    unsupportedTransports.append(transport.rawValue)
+                }
+            }
+
+            // Log warning for unsupported transports (debug only)
+            #if DEBUG
+            if !unsupportedTransports.isEmpty {
+                print("[PasskeyPlugin] Warning: The following transports are not supported on iOS and were ignored: \(unsupportedTransports.joined(separator: ", "))")
+            }
+            #endif
+
+            // Use supported transports if any, otherwise fall back to all supported
+            if !supportedTransports.isEmpty {
+                trList = supportedTransports
+            } else {
+                #if DEBUG
+                print("[PasskeyPlugin] Warning: No supported transports found in request, falling back to all supported transports")
+                #endif
+            }
         }
         return ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor.init(credentialID: credentialData,
                                                                             transports: trList)

@@ -3,16 +3,26 @@ import AuthenticationServices
 import UIKit
 
 @available(iOS 15.0, *)
+@MainActor
 class PasskeyCredentialDelegate: NSObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
 
     typealias ResultData = Result<[String: Any], Error>
     var completion: ((ResultData) -> Void)?
     private var timeoutTimer: Timer?
+    private var hasCompleted = false
+
+    /// Thread-safe method to call completion exactly once, preventing race conditions
+    /// between timeout and authorization callbacks.
+    private func completeOnce(with result: ResultData) {
+        guard !hasCompleted else { return }
+        hasCompleted = true
+        cleanupTimer()
+        completion?(result)
+        completion = nil
+    }
 
     // Called when passkey creation/authentication succeeds
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
-        cleanupTimer()
-        
         switch authorization.credential {
         case let credential as ASAuthorizationPlatformPublicKeyCredentialRegistration:
             let id = credential.credentialID.toBase64URLEncoded()
@@ -32,7 +42,7 @@ class PasskeyCredentialDelegate: NSObject, ASAuthorizationControllerDelegate, AS
                 "type": type,
                 "response": response
             ]
-            completion?(.success(result))
+            completeOnce(with: .success(result))
 
         case let credential as ASAuthorizationPlatformPublicKeyCredentialAssertion:
             let id = credential.credentialID.toBase64URLEncoded()
@@ -58,7 +68,7 @@ class PasskeyCredentialDelegate: NSObject, ASAuthorizationControllerDelegate, AS
                 "type": type,
                 "response": response
             ]
-            completion?(.success(result))
+            completeOnce(with: .success(result))
 
         case let credential as ASAuthorizationSecurityKeyPublicKeyCredentialRegistration:
             let id = credential.credentialID.toBase64URLEncoded()
@@ -78,7 +88,7 @@ class PasskeyCredentialDelegate: NSObject, ASAuthorizationControllerDelegate, AS
                 "type": type,
                 "response": response
             ]
-            completion?(.success(result))
+            completeOnce(with: .success(result))
 
         case let credential as ASAuthorizationSecurityKeyPublicKeyCredentialAssertion:
             let id = credential.credentialID.toBase64URLEncoded()
@@ -104,7 +114,7 @@ class PasskeyCredentialDelegate: NSObject, ASAuthorizationControllerDelegate, AS
                 "type": type,
                 "response": response
             ]
-            completion?(.success(result))
+            completeOnce(with: .success(result))
 
         default:
             let error = NSError(
@@ -112,15 +122,15 @@ class PasskeyCredentialDelegate: NSObject, ASAuthorizationControllerDelegate, AS
                 code: -300,
                 userInfo: [NSLocalizedDescriptionKey: "Unsupported credential type: \(type(of: authorization.credential))"]
             )
-
-            completion?(.failure(error))
+            completeOnce(with: .failure(error))
         }
     }
 
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
-        cleanupTimer()
-        print("Passkey flow failed: \(error.localizedDescription)")
-        completion?(.failure(error))
+        #if DEBUG
+        print("[PasskeyPlugin] Passkey flow failed: \(error.localizedDescription)")
+        #endif
+        completeOnce(with: .failure(error))
     }
 
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
@@ -138,7 +148,9 @@ class PasskeyCredentialDelegate: NSObject, ASAuthorizationControllerDelegate, AS
         // Set up timeout if provided
         if let timeoutInterval = timeout, timeoutInterval > 0 {
             timeoutTimer = Timer.scheduledTimer(withTimeInterval: timeoutInterval / 1000.0, repeats: false) { [weak self] _ in
-                self?.handleTimeout()
+                Task { @MainActor in
+                    self?.handleTimeout()
+                }
             }
         }
         
@@ -146,16 +158,12 @@ class PasskeyCredentialDelegate: NSObject, ASAuthorizationControllerDelegate, AS
     }
     
     private func handleTimeout() {
-        timeoutTimer?.invalidate()
-        timeoutTimer = nil
-        
         let timeoutError = NSError(
             domain: "PasskeyTimeout",
             code: -1004,
             userInfo: [NSLocalizedDescriptionKey: "Passkey operation timed out"]
         )
-        completion?(.failure(timeoutError))
-        completion = nil
+        completeOnce(with: .failure(timeoutError))
     }
     
     private func cleanupTimer() {
