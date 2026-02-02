@@ -46,7 +46,7 @@ import android.util.Base64
 class PasskeyPlugin : Plugin() {
 
     private var mainScope: CoroutineScope? = null
-    
+
     /**
      * Initializes the plugin when loaded by Capacitor
      * Sets up coroutine scope for async operations
@@ -56,7 +56,7 @@ class PasskeyPlugin : Plugin() {
         // Initialize scope when plugin loads
         mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     }
-    
+
     /**
      * Cleanup when plugin is destroyed
      * Cancels coroutine scope to prevent memory leaks
@@ -90,9 +90,12 @@ class PasskeyPlugin : Plugin() {
     @PluginMethod
     fun createPasskey(call: PluginCall) {
         // Security: Don't log sensitive data
-        val rpId = call.getObject("publicKey")?.optString("rp")?.let {
-            try { JSONObject(it).optString("id") } catch (e: Exception) { "unknown" }
-        } ?: "unknown"
+        val rpId = call.getObject("publicKey")
+            ?.optJSONObject("rp")
+            ?.optString("id")
+            ?.takeIf { it.isNotBlank() }
+            ?: "unknown"
+
         Log.d("PasskeyPlugin", "CreatePasskey called for rpId: $rpId")
         val publicKey = call.getObject("publicKey")
 
@@ -101,14 +104,14 @@ class PasskeyPlugin : Plugin() {
             handlePluginError(call, code = ErrorCodes.INVALID_INPUT, message = "PublicKey is null in request!")
             return
         }
-        
+
         // Input validation
         val challenge = publicKey.optString("challenge")
         if (challenge.isNullOrEmpty() || !isValidBase64Url(challenge)) {
             handlePluginError(call, code = ErrorCodes.INVALID_INPUT, message = "Invalid or missing challenge")
             return
         }
-        
+
         val userObj = publicKey.optJSONObject("user")
         val userId = userObj?.optString("id")
         if (userId.isNullOrEmpty() || !isValidBase64Url(userId)) {
@@ -116,19 +119,64 @@ class PasskeyPlugin : Plugin() {
             return
         }
 
-        val credentialManager = CredentialManager.Companion.create(context)
+        // Parse and validate authenticatorAttachment
+        val authenticatorSelection = publicKey.optJSONObject("authenticatorSelection")
+        val authenticatorAttachment = authenticatorSelection?.optString("authenticatorAttachment")
+
+        // Validate authenticatorAttachment value if present
+        if (authenticatorAttachment != null && authenticatorAttachment.isNotEmpty() &&
+            authenticatorAttachment != "platform" &&
+            authenticatorAttachment != "cross-platform") {
+            handlePluginError(
+                call,
+                code = ErrorCodes.INVALID_INPUT,
+                message = "Invalid authenticatorAttachment: must be 'platform' or 'cross-platform', got '$authenticatorAttachment'"
+            )
+            return
+        }
+
+        // Log for debugging
+        Log.d("PasskeyPlugin", "Authenticator attachment type: ${authenticatorAttachment ?: "not specified"}")
+
+        // For security keys, verify transports are included
+        if (authenticatorAttachment == "cross-platform") {
+            val excludeCreds = publicKey.optJSONArray("excludeCredentials")
+            if (excludeCreds != null) {
+                for (i in 0 until excludeCreds.length()) {
+                    val cred = excludeCreds.optJSONObject(i)
+                    if (cred?.has("transports") != true) {
+                        Log.w("PasskeyPlugin", "Security key credential missing transports hint at index $i")
+                    }
+                }
+            }
+        }
+
+        val credentialManager = CredentialManager.create(context)
+        val publicKeyJson = publicKey.toString()
+
+        // For cross-platform authenticators, set preferImmediately to false
+        // This hints to the system that we're willing to wait for external devices
+        val preferImmediately = authenticatorAttachment != "cross-platform"
+
         val createPublicKeyCredentialRequest =
-            CreatePublicKeyCredentialRequest(publicKey.toString())
-        
+            CreatePublicKeyCredentialRequest(
+                requestJson = publicKeyJson,
+                preferImmediatelyAvailableCredentials = preferImmediately
+            )
+
         // Get timeout from options, default to 60 seconds
         val timeout = publicKey.optLong("timeout", 60000L)
-        
-        mainScope?.launch {
+
+        val scope = mainScope ?: run {
+            handlePluginError(call, code = ErrorCodes.UNKNOWN, message = "Plugin not initialized")
+            return
+        }
+        scope.launch(Dispatchers.IO) {
             try {
                 withTimeout(timeout) {
                 val activity: Activity? = activity
                 if (activity == null) {
-                    handlePluginError(call, message = "No activity found to handle passkey registration!")
+                    handlePluginError(call, code = ErrorCodes.NO_ACTIVITY, message = "No activity found to handle passkey registration!")
                     return@withTimeout
                 }
                 val credentialResult = activity.let {
@@ -169,10 +217,10 @@ class PasskeyPlugin : Plugin() {
             } catch (e: TimeoutCancellationException) {
                 handlePluginError(call, code = ErrorCodes.TIMEOUT, message = "Operation timed out after ${timeout}ms")
             } catch (e: CreateCredentialException) {
-                handleCreatePasskeyException(call, e)
+                handleCreatePasskeyException(call, e, authenticatorAttachment)
             } catch (e: Exception) {
                 Log.e("PasskeyPlugin", "Unexpected error during passkey creation: ${e.message}", e)
-                handlePluginError(call, code = "UNKNOWN_ERROR", message = "An unexpected error occurred during passkey creation: ${e.message ?: "Unknown error"}")
+                handlePluginError(call, code = ErrorCodes.UNKNOWN, message = "An unexpected error occurred during passkey creation: ${e.message ?: "Unknown error"}")
             }
         }
     }
@@ -182,12 +230,31 @@ class PasskeyPlugin : Plugin() {
      * Provides consistent error handling across different exception types
      * @param call PluginCall to reject with appropriate error
      * @param e CreateCredentialException thrown during passkey creation
+     * @param authenticatorAttachment Authenticator type requested (for enhanced error messages)
      */
-    private fun handleCreatePasskeyException(call: PluginCall, e: CreateCredentialException) {
+    private fun handleCreatePasskeyException(call: PluginCall, e: CreateCredentialException, authenticatorAttachment: String? = null) {
         Log.e("PasskeyPlugin", "Error during passkey creation: ${e.message}", e)
         when (e) {
             is CreatePublicKeyCredentialDomException -> {
-                handlePluginError(call, code = ErrorCodes.DOM, message = (e.errorMessage ?: "Unknown DOM error").toString())
+                // Log full exception details for debugging
+                Log.e("PasskeyPlugin", "DOM Exception - type: ${e.type}, errorMessage: ${e.errorMessage}, message: ${e.message}")
+
+                // Check for specific CTAP/FIDO errors
+                val errorMsg = e.errorMessage?.toString() ?: e.message ?: ""
+
+                // Provide helpful context for common low-level errors
+                val enhancedMsg = when {
+                    errorMsg.contains("0x6f00") || errorMsg.contains("Low level error 0x6f00") -> {
+                        "NFC communication failed (0x6f00). Hold security key steady near NFC antenna for 2-3 seconds."
+                    }
+                    e.type.contains("UNKNOWN_ERROR") -> {
+                        "Unknown error from Android Credential Manager. Check Digital Asset Links configuration for rpId."
+                    }
+                    else -> errorMsg.ifEmpty { "DOM error: ${e.type}" }
+                }
+
+                Log.e("PasskeyPlugin", "Final error message: $enhancedMsg")
+                handlePluginError(call, code = ErrorCodes.DOM, message = enhancedMsg)
                 return
             }
             is CreateCredentialCancellationException -> {
@@ -207,7 +274,13 @@ class PasskeyPlugin : Plugin() {
                 return
             }
             is CreateCredentialUnsupportedException -> {
-                handlePluginError(call, code = ErrorCodes.UNSUPPORTED, message = "Passkey creation is not supported on this device or platform.")
+                // Enhanced error message for cross-platform authenticators
+                val msg = if (authenticatorAttachment == "cross-platform") {
+                    "External security keys (YubiKey) not supported on this device. Ensure NFC is enabled and the key supports FIDO2/WebAuthn."
+                } else {
+                    "Passkey creation is not supported on this device or platform."
+                }
+                handlePluginError(call, code = ErrorCodes.UNSUPPORTED, message = msg)
                 return
             }
             else -> {
@@ -226,40 +299,82 @@ class PasskeyPlugin : Plugin() {
     @PluginMethod
     fun authenticate(call: PluginCall) {
         val publicKey = call.getObject("publicKey")
-        
+
         if (publicKey == null) {
             handlePluginError(call, code = ErrorCodes.INVALID_INPUT, message = "PublicKey is null in request!")
             return
         }
-        
+
         // Input validation
         val challenge = publicKey.optString("challenge")
         if (challenge.isNullOrEmpty() || !isValidBase64Url(challenge)) {
             handlePluginError(call, code = ErrorCodes.INVALID_INPUT, message = "Invalid or missing challenge")
             return
         }
-        
-        var publicKeyString = publicKey.toString()
 
-        val credentialManager = CredentialManager.Companion.create(context)
+        // Parse and validate authenticatorAttachment
+        val authenticatorAttachment = publicKey.optString("authenticatorAttachment")
+
+        // Validate authenticatorAttachment value if present
+        if (authenticatorAttachment != null && authenticatorAttachment.isNotEmpty() &&
+            authenticatorAttachment != "platform" &&
+            authenticatorAttachment != "cross-platform") {
+            handlePluginError(
+                call,
+                code = ErrorCodes.INVALID_INPUT,
+                message = "Invalid authenticatorAttachment: must be 'platform' or 'cross-platform', got '$authenticatorAttachment'"
+            )
+            return
+        }
+
+        Log.d("PasskeyPlugin", "Authenticate with attachment type: ${authenticatorAttachment.ifEmpty { "not specified" }}")
+
+        // For security keys, verify credentials include transport hints
+        if (authenticatorAttachment == "cross-platform") {
+            val allowCreds = publicKey.optJSONArray("allowCredentials")
+            if (allowCreds == null || allowCreds.length() == 0) {
+                Log.w("PasskeyPlugin", "Cross-platform auth without allowCredentials may prompt for new key creation")
+            } else {
+                for (i in 0 until allowCreds.length()) {
+                    val cred = allowCreds.optJSONObject(i)
+                    val transports = cred?.optJSONArray("transports")
+                    if (transports == null || transports.length() == 0) {
+                        Log.w("PasskeyPlugin", "Security key credential at index $i missing transports - may fail to detect key")
+                    }
+                }
+            }
+        }
+
+        val publicKeyString = publicKey.toString()
+
+        val credentialManager = CredentialManager.create(context)
+
+        // Only prefer immediately available for platform authenticators
+        // Security keys require user interaction (tap/insert)
+        val preferImmediate = authenticatorAttachment != "cross-platform"
+
         val getCredentialRequest =
             GetCredentialRequest(
                 listOf(
                     GetPublicKeyCredentialOption(
                         publicKeyString
                     )
-                ), preferImmediatelyAvailableCredentials = true
+                ), preferImmediatelyAvailableCredentials = preferImmediate
             )
-        
+
         // Get timeout from options, default to 60 seconds
         val timeout = publicKey.optLong("timeout", 60000L)
-        
-        mainScope?.launch {
+
+        val scope = mainScope ?: run {
+            handlePluginError(call, code = ErrorCodes.UNKNOWN, message = "Plugin not initialized")
+            return
+        }
+        scope.launch(Dispatchers.IO) {
             try {
                 withTimeout(timeout) {
                 val activity: Activity? = activity
                 if (activity == null) {
-                    handlePluginError(call, message = "No activity found to handle passkey authentication!")
+                    handlePluginError(call, code = ErrorCodes.NO_ACTIVITY, message = "No activity found to handle passkey authentication!")
                     return@withTimeout
                 }
                 val credentialResult =
@@ -278,9 +393,9 @@ class PasskeyPlugin : Plugin() {
                     return@withTimeout
                 }
                 val passkeyResponse = JSObject().apply {
-                    put("id", authResponseJson.get("id"))
-                    put("rawId", authResponseJson.get("rawId"))
-                    put("type", authResponseJson.get("type"))
+                    put("id", authResponseJson.optString("id"))
+                    put("rawId", authResponseJson.optString("rawId"))
+                    put("type", authResponseJson.optString("type"))
                     put("response", JSObject().apply {
                         put("clientDataJSON", responseField.optString("clientDataJSON"))
                         put("authenticatorData", responseField.optString("authenticatorData"))
@@ -289,15 +404,15 @@ class PasskeyPlugin : Plugin() {
                     })
                 }
 
-                call.resolve(passkeyResponse);
+                call.resolve(passkeyResponse)
                 } // End of withTimeout
             } catch (e: TimeoutCancellationException) {
                 handlePluginError(call, code = ErrorCodes.TIMEOUT, message = "Operation timed out after ${timeout}ms")
             } catch (e: GetCredentialException) {
-                handleAuthenticationError(call, e)
+                handleAuthenticationError(call, e, authenticatorAttachment)
             } catch (e: Exception) {
                 Log.e("PasskeyPlugin", "Unexpected error during passkey authentication: ${e.message}", e)
-                handlePluginError(call, code = "UNKNOWN_ERROR", message = "An unexpected error occurred during passkey authentication: ${e.message ?: "Unknown error"}")
+                handlePluginError(call, code = ErrorCodes.UNKNOWN, message = "An unexpected error occurred during passkey authentication: ${e.message ?: "Unknown error"}")
             }
         }
     }
@@ -307,12 +422,27 @@ class PasskeyPlugin : Plugin() {
      * Handles various authentication failure scenarios consistently
      * @param call PluginCall to reject with appropriate error
      * @param e GetCredentialException thrown during authentication
+     * @param authenticatorAttachment Authenticator type requested (for enhanced error messages)
      */
-    private fun handleAuthenticationError(call: PluginCall, e: GetCredentialException) {
+    private fun handleAuthenticationError(call: PluginCall, e: GetCredentialException, authenticatorAttachment: String? = null) {
         Log.e("PasskeyPlugin", "Error during passkey authentication: ${e.message}", e)
         when (e) {
             is GetPublicKeyCredentialDomException -> {
-                handlePluginError(call, code = ErrorCodes.DOM, message = (e.errorMessage ?: "Unknown DOM error").toString())
+                // Log full exception details for debugging
+                Log.e("PasskeyPlugin", "DOM Exception - type: ${e.type}, errorMessage: ${e.errorMessage}, message: ${e.message}")
+
+                // Extract more details from the exception type
+                val domErrorType = when {
+                    e.type.contains("UNKNOWN_ERROR") -> "Unknown error from Android Credential Manager. This often indicates: 1) Digital Asset Links misconfiguration for rpId, 2) Missing or invalid assetlinks.json, 3) Package name mismatch, or 4) Device compatibility issue with the authenticator type."
+                    else -> e.type
+                }
+
+                val errorMsg = e.errorMessage?.toString()
+                    ?: e.message
+                    ?: "DOM error: $domErrorType"
+
+                Log.e("PasskeyPlugin", "Final error message: $errorMsg")
+                handlePluginError(call, code = ErrorCodes.DOM, message = errorMsg)
                 return
             }
             is GetCredentialCancellationException -> {
@@ -332,7 +462,13 @@ class PasskeyPlugin : Plugin() {
                 return
             }
             is GetCredentialUnsupportedException -> {
-                handlePluginError(call, code = ErrorCodes.UNSUPPORTED, message = "Passkey authentication is not supported on this device or platform.")
+                // Enhanced error message for cross-platform authenticators
+                val msg = if (authenticatorAttachment == "cross-platform") {
+                    "External security keys (YubiKey) not supported on this device. Ensure NFC is enabled and the key supports FIDO2/WebAuthn."
+                } else {
+                    "Passkey authentication is not supported on this device or platform."
+                }
+                handlePluginError(call, code = ErrorCodes.UNSUPPORTED, message = msg)
                 return
             }
             is NoCredentialException -> {
@@ -352,7 +488,7 @@ class PasskeyPlugin : Plugin() {
      * @param code Error code matching Web implementation codes
      * @param message Human-readable error description
      */
-    fun handlePluginError(call: PluginCall, code: String = "UNKNOWN_ERROR", message: String) {
+    fun handlePluginError(call: PluginCall, code: String = ErrorCodes.UNKNOWN, message: String) {
         Log.e("PasskeyPlugin", "Error: $message")
         val errorData = JSObject().apply {
             put("code", code)
@@ -360,7 +496,7 @@ class PasskeyPlugin : Plugin() {
         }
         call.reject(message, code, errorData)
     }
-    
+
     /**
      * Validates base64url encoded strings
      * Checks format and attempts decoding to ensure validity
