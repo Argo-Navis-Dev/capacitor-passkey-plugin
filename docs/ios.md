@@ -22,16 +22,15 @@ This guide covers iOS-specific configuration, requirements, and implementation d
 
 ### Associated Domains
 
-Add your domain to `ios/App/App/Info.plist` to enable passkey operations:
+To enable passkey operations, configure Associated Domains in your Capacitor app's Xcode project:
 
-```xml
-<key>com.apple.developer.web-credentials</key>
-<array>
-    <string>yourdomain.com</string>
-</array>
-```
+1. Open your Capacitor app project in Xcode (typically at `ios/App/App.xcworkspace`)
+2. Select your app target
+3. Go to "Signing & Capabilities"
+4. Add "Associated Domains" capability
+5. Add `webcredentials:yourdomain.com` (replace with your actual domain)
 
-You must also configure your server to host an `apple-app-site-association` file at `https://yourdomain.com/.well-known/apple-app-site-association`:
+Your server must also host an `apple-app-site-association` file at `https://yourdomain.com/.well-known/apple-app-site-association`:
 
 ```json
 {
@@ -41,15 +40,7 @@ You must also configure your server to host an `apple-app-site-association` file
 }
 ```
 
-### Entitlements
-
-Ensure your app has the Associated Domains capability enabled in Xcode:
-
-1. Open your project in Xcode
-2. Select your app target
-3. Go to "Signing & Capabilities"
-4. Add "Associated Domains" capability
-5. Add `webcredentials:yourdomain.com`
+Replace `TEAM_ID` with your Apple Team ID and `com.yourcompany.yourapp` with your app's bundle identifier.
 
 ## Authenticator Selection
 
@@ -125,7 +116,7 @@ iOS-specific error mappings:
 
 ### Passkey creation fails with RPID_VALIDATION_ERROR
 
-1. Verify your `Info.plist` contains the correct domain
+1. Verify your Associated Domains capability includes the correct domain (in Xcode: Signing & Capabilities)
 2. Check that `apple-app-site-association` is accessible at `https://yourdomain.com/.well-known/apple-app-site-association`
 3. Ensure the Team ID in the association file matches your app's Team ID
 4. Clear the association cache: Settings > Developer > Associated Domains Development
